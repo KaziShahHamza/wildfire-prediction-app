@@ -1,66 +1,49 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
+from datetime import date
 import joblib
+from utils.weather import get_weather
+from utils.ndvi import get_ndvi_data
+from utils.predict import predict_wildfire
+import numpy as np
 
-# ---------------------
+st.set_page_config(page_title="California Wildfire Prediction", layout="wide")
+st.title("California Wildfire Prediction (Live)")
+
 # Load model and scaler
-# ---------------------
-@st.cache_resource
-def load_model():
-    model = joblib.load("wildfire_rf_model.pkl")
-    scaler = joblib.load("scaler.pkl")
-    return model, scaler
+model = joblib.load("wildfire_rf_model.pkl")
+scaler = joblib.load("scaler.pkl")
 
-model, scaler = load_model()
+# Get current date
+today = date.today()
+st.markdown(f"**Present Date:** {today}")
 
-# ---------------------
-# App UI
-# ---------------------
-st.title("Wildfire Prediction App (Batch CSV)")
+# Fetch live weather
+st.info("Fetching live weather data...")
+precip, max_temp, min_temp, wind = get_weather()
 
-st.markdown("""
-Upload a CSV file with **up to 50 rows**.  
-CSV should have exactly **7 columns** in this order:  
-`PRECIPITATION, MAX_TEMP, MIN_TEMP, AVG_WIND_SPEED, NDVI, NDVI_7day_avg, NDVI_30day_avg`
-""")
+# Fetch NDVI
+st.info("Fetching NDVI data from GEE...")
+ndvi, ndvi_7, ndvi_30 = get_ndvi_data(today)
 
-uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+# Display features
+st.subheader("Input Features")
+st.write({
+    "Precipitation (mm)": precip,
+    "Max Temperature (°C)": max_temp,
+    "Min Temperature (°C)": min_temp,
+    "Wind Speed (m/s)": wind,
+    "NDVI (today)": ndvi,
+    "NDVI 7-day avg": ndvi_7,
+    "NDVI 30-day avg": ndvi_30
+})
 
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    
-    # Limit to 50 rows
-    if len(df) > 50:
-        st.warning("Only the first 50 rows will be processed.")
-        df = df.head(50)
-    
-    # Check for correct number of columns
-    if df.shape[1] != 7:
-        st.error("CSV must have exactly 7 columns.")
-    else:
-        # Scale features
-        scaled = scaler.transform(df.values)
-        
-        # Predict probabilities
-        probs = model.predict_proba(scaled)[:, 1]  # probability of wildfire
-        
-        # Create results DataFrame
-        results = df.copy()
-        results["Wildfire_Probability_%"] = np.round(probs * 100, 2)
-        
-        # Assign risk levels
-        def risk_level(p):
-            if p < 40:
-                return "Low ✅"
-            else:
-                return "High 🔥"
-        
-        results["Risk_Level"] = [risk_level(p) for p in results["Wildfire_Probability_%"]]
-        
-        st.markdown("### Prediction Results")
-        st.dataframe(results)
-        
-        # Optional: download results
-        csv = results.to_csv(index=False).encode()
-        st.download_button("Download Results as CSV", data=csv, file_name="wildfire_predictions.csv", mime="text/csv")
+# Prepare feature vector
+features = np.array([[precip, max_temp, min_temp, wind, ndvi, ndvi_7, ndvi_30]])
+
+# Predict wildfire
+proba, risk = predict_wildfire(model, scaler, features)
+
+# Display result
+st.subheader("Wildfire Prediction")
+st.write(f"Probability: {proba}%")
+st.write(f"Risk Level: {risk}")
